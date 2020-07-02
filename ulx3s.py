@@ -4,6 +4,12 @@
 # This file is Copyright (c) 2018 David Shah <dave@ds0.me>
 # License: BSD
 
+# Use:
+# ./ulx3s.py --build --load
+# ./litex_server --uart --uart-port=/dev/ttyUSBX
+# ./litescope --write (or --read)
+# ./test_sdram.py
+
 import os
 import argparse
 import sys
@@ -15,24 +21,22 @@ from litex.build.io import DDROutput
 
 from litex_boards.platforms import ulx3s
 
-from litex.build.lattice.trellis import trellis_args, trellis_argdict
-
 from litex.soc.cores.clock import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.soc_sdram import *
 from litex.soc.integration.builder import *
 from litex.soc.cores.led import LedChaser
 
+from litedram.init import get_sdram_phy_py_header
 from litedram import modules as litedram_modules
 from litedram.phy import GENSDRPHY
 
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(Module):
-    def __init__(self, platform, sys_clk_freq, with_usb_pll=False):
+    def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys    = ClockDomain()
         self.clock_domains.cd_sys_ps = ClockDomain(reset_less=True)
-        self.clock_domains.cd_sd     = ClockDomain()
 
         # # #
 
@@ -46,18 +50,7 @@ class _CRG(Module):
         pll.register_clkin(clk25, 25e6)
         pll.create_clkout(self.cd_sys,    sys_clk_freq)
         pll.create_clkout(self.cd_sys_ps, sys_clk_freq, phase=90)
-        pll.create_clkout(self.cd_sd,     10e6)
-        self.specials += AsyncResetSynchronizer(self.cd_sys,    ~pll.locked | rst)
-        self.specials += AsyncResetSynchronizer(self.cd_sd,     ~pll.locked | rst)
-
-        # USB PLL
-        if with_usb_pll:
-            self.submodules.usb_pll = usb_pll = ECP5PLL()
-            usb_pll.register_clkin(clk25, 25e6)
-            self.clock_domains.cd_usb_12 = ClockDomain()
-            self.clock_domains.cd_usb_48 = ClockDomain()
-            usb_pll.create_clkout(self.cd_usb_12, 12e6, margin=0)
-            usb_pll.create_clkout(self.cd_usb_48, 48e6, margin=0)
+        self.specials += AsyncResetSynchronizer(self.cd_sys, ~pll.locked | rst)
 
         # SDRAM clock
         self.specials += DDROutput(1, 0, platform.request("sdram_clock"), ClockSignal("sys_ps"))
@@ -74,14 +67,20 @@ class BaseSoC(SoCCore):
         platform = ulx3s.Platform(device=device, toolchain=toolchain)
 
         # SoCCore ----------------------------------------------------------------------------------
+        kwargs["cpu_type"]            = None
+        kwargs["integrated_rom_size"] = 0
+        kwargs["uart_name"]           = "crossover"
+        kwargs["csr_data_width"]      = 32
         SoCCore.__init__(self, platform, sys_clk_freq,
             ident          = "LiteX SoC on ULX3S",
             ident_version  = True,
             **kwargs)
 
+        # UARTBone ---------------------------------------------------------------------------------
+        self.add_uartbone()
+
         # CRG --------------------------------------------------------------------------------------
-        with_usb_pll = kwargs.get("uart_name", None) == "usb_acm"
-        self.submodules.crg = _CRG(platform, sys_clk_freq, with_usb_pll)
+        self.submodules.crg = _CRG(platform, sys_clk_freq)
 
         # SDR SDRAM --------------------------------------------------------------------------------
         if not self.integrated_main_ram_size:
@@ -90,10 +89,8 @@ class BaseSoC(SoCCore):
                 phy                     = self.sdrphy,
                 module                  = getattr(litedram_modules, sdram_module_cls)(sys_clk_freq, "1:1"),
                 origin                  = self.mem_map["main_ram"],
-                size                    = kwargs.get("max_sdram_size", 0x40000000),
-                l2_cache_size           = kwargs.get("l2_size", 8192),
-                l2_cache_min_data_width = kwargs.get("min_l2_data_width", 128),
-                l2_cache_reverse        = True
+                l2_cache_size           = 32,
+                l2_cache_min_data_width = 128,
             )
 
         # Leds -------------------------------------------------------------------------------------
@@ -101,6 +98,22 @@ class BaseSoC(SoCCore):
             pads         = Cat(*[platform.request("user_led", i) for i in range(8)]),
             sys_clk_freq = sys_clk_freq)
         self.add_csr("leds")
+
+        # Analyzer ---------------------------------------------------------------------------------
+        from litescope import LiteScopeAnalyzer
+        analyzer_signals = [self.sdrphy.dfi]
+        self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals,
+            depth        = 128,
+            clock_domain = "sys",
+            csr_csv      = "analyzer.csv")
+        self.add_csr("analyzer")
+
+    def generate_sdram_phy_py_header(self):
+        f = open("sdram_init.py", "w")
+        f.write(get_sdram_phy_py_header(
+            self.sdram.controller.settings.phy,
+            self.sdram.controller.settings.timing))
+        f.close()
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -112,25 +125,16 @@ def main():
     parser.add_argument("--device",             dest="device",    default="LFE5U-45F", help="FPGA device, ULX3S can be populated with LFE5U-45F (default) or LFE5U-85F")
     parser.add_argument("--sys-clk-freq", default=50e6,           help="System clock frequency (default=50MHz)")
     parser.add_argument("--sdram-module", default="MT48LC16M16",  help="SDRAM module: MT48LC16M16, AS4C32M16 or AS4C16M16 (default=MT48LC16M16)")
-    parser.add_argument("--with-spi-sdcard", action="store_true", help="Enable SPI-mode SDCard support")
-    parser.add_argument("--with-sdcard", action="store_true",     help="Enable SDCard support")
     builder_args(parser)
     soc_sdram_args(parser)
-    trellis_args(parser)
     args = parser.parse_args()
 
     soc = BaseSoC(device=args.device, toolchain=args.toolchain,
         sys_clk_freq=int(float(args.sys_clk_freq)),
-        sdram_module_cls=args.sdram_module,
-        **soc_sdram_argdict(args))
-    assert not (args.with_spi_sdcard and args.with_sdcard)
-    if args.with_spi_sdcard:
-        soc.add_spi_sdcard()
-    if args.with_sdcard:
-        soc.add_sdcard()
-    builder = Builder(soc, **builder_argdict(args))
-    builder_kargs = trellis_argdict(args) if args.toolchain == "trellis" else {}
-    builder.build(**builder_kargs, run=args.build)
+        sdram_module_cls=args.sdram_module)
+    builder = Builder(soc, csr_csv="csr.csv")
+    builder.build(run=args.build)
+    soc.generate_sdram_phy_py_header()
 
     if args.load:
         prog = soc.platform.create_programmer()
