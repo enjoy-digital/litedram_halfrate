@@ -50,7 +50,7 @@ if sdram_initialization:
         print(comment)
         wb.regs.sdram_dfii_pi0_address.write(a)
         wb.regs.sdram_dfii_pi0_baddress.write(ba)
-        if i < 2:
+        if i < 1:
             wb.regs.sdram_dfii_control.write(cmd)
         else:
             wb.regs.sdram_dfii_pi0_command.write(cmd)
