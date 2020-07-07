@@ -59,8 +59,8 @@ class _CRG(Module):
         else:
             pll.create_clkout(self.cd_sys_ps, sys_clk_freq, phase=90)
         self.specials += AsyncResetSynchronizer(self.cd_sys, ~pll.locked | rst)
-        if sdram_sys2x:
-            self.specials += AsyncResetSynchronizer(self.cd_sys2x, ~pll.locked | rst)
+        #  if sdram_sys2x:
+        #      self.specials += AsyncResetSynchronizer(self.cd_sys2x, ~pll.locked | rst)
 
         # SDRAM clock
         sdram_clk = ClockSignal("sys2x_ps" if sdram_sys2x else "sys_ps")
@@ -124,20 +124,28 @@ class BaseSoC(SoCCore):
             analyzer_signals = [self.sdrphy.dfi]
         else:
             wb_no_dat = ["cyc", "stb", "ack", "we", "adr", "err"]
-            scratch = Signal(8)
-            self.comb += scratch.eq(self.ctrl._scratch.storage[:8])
+            dfi_signals = ["cas_n", "ras_n", "we_n", "address", "bank",
+                           "rddata", "rddata_en", "rddata_valid",
+                           "wrdata", "wrdata_en", "wrdata_mask"]
+            #  scratch = Signal(8)
+            #  self.comb += scratch.eq(self.ctrl._scratch.storage[:8])
             analyzer_signals = [
                 #  self.ctrl._scratch.storage,
-                scratch,
+                #  scratch,
+
                 self.sdrphy.dfi,
                 self.sdrphy.full_rate_phy.dfi,
+                #  *[getattr(self.sdrphy.dfi.p0, s) for s in dfi_signals],
+                #  *[getattr(self.sdrphy.dfi.p1, s) for s in dfi_signals],
+                #  *[getattr(self.sdrphy.full_rate_phy.dfi.p0, s) for s in dfi_signals],
+
                 self.sdrphy.phase_sel,
             ]
             if l2_size > 0:
                 analyzer_signals += [getattr(self.l2_cache.master, a) for a in wb_no_dat]
                 analyzer_signals += [getattr(self.l2_cache.slave,  a) for a in wb_no_dat]
             else:
-                analyzer_signals += [self.bus.slaves["main_ram"]]
+                #  analyzer_signals += [self.bus.slaves["main_ram"]]
                 #  analyzer_signals += [getattr(self.bus.slaves["main_ram"],  a) for a in wb_no_dat]
                 pass
         self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals,
