@@ -27,9 +27,10 @@ from litex.soc.integration.soc_sdram import *
 from litex.soc.integration.builder import *
 from litex.soc.cores.led import LedChaser
 
-from litedram.init import get_sdram_phy_py_header
 from litedram import modules as litedram_modules
-from litedram.phy import GENSDRPHY, HalfRateGENSDRPHY
+
+from gensdrphy import GENSDRPHY, HalfRateGENSDRPHY
+from init import get_sdram_phy_py_header
 
 # CRG ----------------------------------------------------------------------------------------------
 
