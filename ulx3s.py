@@ -29,14 +29,18 @@ from litex.soc.cores.led import LedChaser
 
 from litedram.init import get_sdram_phy_py_header
 from litedram import modules as litedram_modules
-from litedram.phy import GENSDRPHY
+from litedram.phy import GENSDRPHY, HalfRateGENSDRPHY
 
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(Module):
-    def __init__(self, platform, sys_clk_freq):
+    def __init__(self, platform, sys_clk_freq, sdram_sys2x=False):
         self.clock_domains.cd_sys    = ClockDomain()
-        self.clock_domains.cd_sys_ps = ClockDomain(reset_less=True)
+        if sdram_sys2x:
+            self.clock_domains.cd_sys2x    = ClockDomain()
+            self.clock_domains.cd_sys2x_ps = ClockDomain(reset_less=True)
+        else:
+            self.clock_domains.cd_sys_ps = ClockDomain(reset_less=True)
 
         # # #
 
@@ -49,11 +53,18 @@ class _CRG(Module):
         self.comb += pll.reset.eq(rst)
         pll.register_clkin(clk25, 25e6)
         pll.create_clkout(self.cd_sys,    sys_clk_freq)
-        pll.create_clkout(self.cd_sys_ps, sys_clk_freq, phase=90)
+        if sdram_sys2x:
+            pll.create_clkout(self.cd_sys2x,    2*sys_clk_freq)
+            pll.create_clkout(self.cd_sys2x_ps, 2*sys_clk_freq, phase=90)
+        else:
+            pll.create_clkout(self.cd_sys_ps, sys_clk_freq, phase=90)
         self.specials += AsyncResetSynchronizer(self.cd_sys, ~pll.locked | rst)
+        if sdram_sys2x:
+            self.specials += AsyncResetSynchronizer(self.cd_sys2x, ~pll.locked | rst)
 
         # SDRAM clock
-        self.specials += DDROutput(1, 0, platform.request("sdram_clock"), ClockSignal("sys_ps"))
+        sdram_clk = ClockSignal("sys2x_ps" if sdram_sys2x else "sys_ps")
+        self.specials += DDROutput(i1=1, i2=0, o=platform.request("sdram_clock"), clk=sdram_clk)
 
         # Prevent ESP32 from resetting FPGA
         self.comb += platform.request("wifi_gpio0").eq(1)
@@ -62,7 +73,7 @@ class _CRG(Module):
 
 class BaseSoC(SoCCore):
     def __init__(self, device="LFE5U-45F", toolchain="trellis",
-        sys_clk_freq=int(50e6), sdram_module_cls="MT48LC16M16", **kwargs):
+        sys_clk_freq=int(50e6), sdram_module_cls="MT48LC16M16", sdram_sys2x=False, **kwargs):
 
         platform = ulx3s.Platform(device=device, toolchain=toolchain)
 
@@ -80,16 +91,24 @@ class BaseSoC(SoCCore):
         self.add_uartbone()
 
         # CRG --------------------------------------------------------------------------------------
-        self.submodules.crg = _CRG(platform, sys_clk_freq)
+        self.submodules.crg = _CRG(platform, sys_clk_freq, sdram_sys2x=sdram_sys2x)
+
+        l2_size = 0
+        #  l2_size = 32
 
         # SDR SDRAM --------------------------------------------------------------------------------
         if not self.integrated_main_ram_size:
-            self.submodules.sdrphy = GENSDRPHY(platform.request("sdram"))
+            if sdram_sys2x:
+                self.submodules.sdrphy = HalfRateGENSDRPHY(platform.request("sdram"))
+                rate = "1:2"
+            else:
+                self.submodules.sdrphy = GENSDRPHY(platform.request("sdram"))
+                rate = "1:1"
             self.add_sdram("sdram",
                 phy                     = self.sdrphy,
-                module                  = getattr(litedram_modules, sdram_module_cls)(sys_clk_freq, "1:1"),
+                module                  = getattr(litedram_modules, sdram_module_cls)(sys_clk_freq, rate),
                 origin                  = self.mem_map["main_ram"],
-                l2_cache_size           = 32,
+                l2_cache_size           = l2_size,
                 l2_cache_min_data_width = 128,
             )
 
@@ -101,12 +120,34 @@ class BaseSoC(SoCCore):
 
         # Analyzer ---------------------------------------------------------------------------------
         from litescope import LiteScopeAnalyzer
-        analyzer_signals = [self.sdrphy.dfi]
+        if not sdram_sys2x:
+            analyzer_signals = [self.sdrphy.dfi]
+        else:
+            wb_no_dat = ["cyc", "stb", "ack", "we", "adr", "err"]
+            scratch = Signal(8)
+            self.comb += scratch.eq(self.ctrl._scratch.storage[:8])
+            analyzer_signals = [
+                #  self.ctrl._scratch.storage,
+                scratch,
+                self.sdrphy.dfi,
+                self.sdrphy.full_rate_phy.dfi,
+                self.sdrphy.phase_sel,
+            ]
+            if l2_size > 0:
+                analyzer_signals += [getattr(self.l2_cache.master, a) for a in wb_no_dat]
+                analyzer_signals += [getattr(self.l2_cache.slave,  a) for a in wb_no_dat]
+            else:
+                analyzer_signals += [self.bus.slaves["main_ram"]]
+                #  analyzer_signals += [getattr(self.bus.slaves["main_ram"],  a) for a in wb_no_dat]
+                pass
         self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals,
             depth        = 128,
-            clock_domain = "sys",
+            clock_domain = "sys2x",
             csr_csv      = "analyzer.csv")
         self.add_csr("analyzer")
+        print("=" * 80)
+        print("   LiteScopeAnalyzer width = {}".format(self.analyzer.data_width))
+        print("=" * 80)
 
     def generate_sdram_phy_py_header(self):
         f = open("sdram_init.py", "w")
@@ -125,13 +166,15 @@ def main():
     parser.add_argument("--device",             dest="device",    default="LFE5U-45F", help="FPGA device, ULX3S can be populated with LFE5U-45F (default) or LFE5U-85F")
     parser.add_argument("--sys-clk-freq", default=50e6,           help="System clock frequency (default=50MHz)")
     parser.add_argument("--sdram-module", default="MT48LC16M16",  help="SDRAM module: MT48LC16M16, AS4C32M16 or AS4C16M16 (default=MT48LC16M16)")
+    parser.add_argument("--sdram-sys2x", action="store_true",     help="Run SDRAM at double the sysclk frequency")
     builder_args(parser)
     soc_sdram_args(parser)
     args = parser.parse_args()
 
     soc = BaseSoC(device=args.device, toolchain=args.toolchain,
         sys_clk_freq=int(float(args.sys_clk_freq)),
-        sdram_module_cls=args.sdram_module)
+        sdram_module_cls=args.sdram_module,
+        sdram_sys2x=args.sdram_sys2x)
     builder = Builder(soc, csr_csv="csr.csv")
     builder.build(run=args.build)
     soc.generate_sdram_phy_py_header()
