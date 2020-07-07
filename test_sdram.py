@@ -15,6 +15,7 @@ def parse_args():
     parser.add_argument("-s", "--start",  default="0",  help="Number of start word")
     parser.add_argument("-r", "--read-only", action="store_true", help="Number of start word")
     parser.add_argument("--random", action="store_true", help="Random data")
+    parser.add_argument("--random-address", action="store_true", help="Random address")
     parser.add_argument("--no-init", action="store_true", help="No SDRAM initialization")
     parser.add_argument("--no-main", action="store_true", help="Don't run main")
     return parser.parse_args()
@@ -62,13 +63,17 @@ def memtest(wb, pattern, *, read=True, write=True, interleaved_rw=False, mark_sc
 
     if not interleaved_rw and write:
         for i, addr in enumerate(pattern):
+            if mark_scratch:
+                wb.regs.ctrl_scratch.write(i)
             wb.write(addr, ref(i))
+            print("{:3d}/{:3d}    ".format(i + 1, len(pattern)), end="\r")
+        print()
 
     errors = 0
     for i, addr in enumerate(pattern):
         if mark_scratch:
             wb.regs.ctrl_scratch.write(i)
-        if write:
+        if write and interleaved_rw:
             wb.write(addr, ref(i))
         if read:
             data = wb.read(addr)
@@ -77,7 +82,7 @@ def memtest(wb, pattern, *, read=True, write=True, interleaved_rw=False, mark_sc
             if data != ref(i):
                 errors += 1
                 result = "KO xor 0x{:08x}".format(data ^ ref(i))
-            print("0x{:08x}: 0x{:08x} != 0x{:08x} {}".format(addr, data, ref(i), result))
+            print("0x{:08x}: 0x{:08x} ?= 0x{:08x} {}".format(addr, data, ref(i), result))
         else:
             print("0x{:08x}: 0x{:08x}".format(addr, data))
 
@@ -95,11 +100,14 @@ if not args.no_init:
 
 sdram_hardware_control()
 
-if __name__ == "__main__" and not args.no_main:
+if not args.no_main:
     start = wb.mems.main_ram.base + 4 * int(args.start, 0)
     length = 4 * int(args.length, 0)
 
-    pattern = range(start, start + length, 4)
+    if not args.random_address:
+        pattern = range(start, start + length, 4)
+    else:
+        pattern = [wb.mems.main_ram.base + seed_to_data(i) % wb.mems.main_ram.size for i in range(length//4)]
     errors = memtest(wb, pattern, write=not args.read_only, read=True,
             interleaved_rw=args.interleaved, random=args.random)
     print("{} errors".format(errors))
