@@ -94,8 +94,8 @@ class BaseSoC(SoCCore):
         # CRG --------------------------------------------------------------------------------------
         self.submodules.crg = _CRG(platform, sys_clk_freq, sdram_sys2x=sdram_sys2x)
 
-        l2_size = 0
-        #  l2_size = 32
+        #  l2_size = 0
+        l2_size = 32
 
         # SDR SDRAM --------------------------------------------------------------------------------
         if not self.integrated_main_ram_size:
@@ -131,12 +131,22 @@ class BaseSoC(SoCCore):
                                "wrdata", "wrdata_en", "wrdata_mask"]
                 #  scratch = Signal(8)
                 #  self.comb += scratch.eq(self.ctrl._scratch.storage[:8])
+
                 analyzer_signals = [
                     #  self.ctrl._scratch.storage,
                     #  scratch,
 
+                    ClockSignal("sys"),
                     self.sdrphy.dfi,
                     self.sdrphy.full_rate_phy.dfi,
+
+                    self.sdrphy.rddata_mid1,
+                    self.sdrphy.rddata_valid_mid1,
+                    self.sdrphy.rddata_mid2,
+                    self.sdrphy.rddata_valid_mid2,
+                    self.sdrphy.rddata_p1_mid,
+                    self.sdrphy.rddata_valid_p1_mid,
+
                     #  *[getattr(self.sdrphy.dfi.p0, s) for s in dfi_signals],
                     #  *[getattr(self.sdrphy.dfi.p1, s) for s in dfi_signals],
                     #  *[getattr(self.sdrphy.full_rate_phy.dfi.p0, s) for s in dfi_signals],
@@ -144,8 +154,9 @@ class BaseSoC(SoCCore):
                     self.sdrphy.phase_sel,
                 ]
                 if l2_size > 0:
-                    analyzer_signals += [getattr(self.l2_cache.master, a) for a in wb_no_dat]
-                    analyzer_signals += [getattr(self.l2_cache.slave,  a) for a in wb_no_dat]
+                    #  analyzer_signals += [getattr(self.l2_cache.master, a) for a in wb_no_dat]
+                    #  analyzer_signals += [getattr(self.l2_cache.slave,  a) for a in wb_no_dat]
+                    pass
                 else:
                     #  analyzer_signals += [self.bus.slaves["main_ram"]]
                     #  analyzer_signals += [getattr(self.bus.slaves["main_ram"],  a) for a in wb_no_dat]

@@ -111,7 +111,7 @@ class HalfRateGENSDRPHY(Module):
             rdphase       = 0,
             wrphase       = 1,
             rdcmdphase    = 1,
-            wrcmdphase    = 1,
+            wrcmdphase    = 0,
             cl            = cl,
             #  read_latency  = (cl + cmd_latency)//2 + 1,
             read_latency  = cl + cmd_latency,
@@ -122,6 +122,8 @@ class HalfRateGENSDRPHY(Module):
         # DFI adaptation ---------------------------------------------------------------------------
         self.dfi = dfi = Interface(addressbits, bankbits, nranks, databits, nphases)
 
+        # Clock ------------------------------------------------------------------------------------
+
         #  # Select active sys2x phase
         #  # sys       ----____----____
         #  # phase_sel 0   1   0   1
@@ -129,33 +131,35 @@ class HalfRateGENSDRPHY(Module):
         #  self.phase_sel = phase_sel = Signal(reset=0)
         #  self.sync.sys2x += phase_sel.eq(~phase_sel)
 
-        # Clock ------------------------------------------------------------------------------------
-        # sys_clk      : system clk, used for dfi interface
-        # sys2x_clk    : 2x system clk
-        sd_sys = getattr(self.sync, "sys")
-        sd_sys2x = getattr(self.sync, "sys2x")
+        #  # sys_clk      : system clk, used for dfi interface
+        #  # sys2x_clk    : 2x system clk
+        #  sd_sys = getattr(self.sync, "sys")
+        #  sd_sys2x = getattr(self.sync, "sys2x")
+        #
+        #  # select active sys2x phase
+        #  # sys_clk   ----____----____
+        #  # phase_sel 0   1   0   1
+        #  self.phase_sel = phase_sel = Signal()
+        #  phase_sys2x = Signal.like(phase_sel)
+        #  phase_sys = Signal.like(phase_sys2x)
+        #
+        #  sd_sys += phase_sys.eq(phase_sys2x)
+        #
+        #  sd_sys2x += [
+        #      If(phase_sys2x == phase_sys,
+        #          phase_sel.eq(0),
+        #      ).Else(
+        #          phase_sel.eq(~phase_sel)
+        #      ),
+        #      phase_sys2x.eq(~phase_sel)
+        #  ]
 
-        # select active sys2x phase
-        # sys_clk   ----____----____
-        # phase_sel 0   1   0   1
         self.phase_sel = phase_sel = Signal()
-        phase_sys2x = Signal.like(phase_sel)
-        phase_sys = Signal.like(phase_sys2x)
-
-        sd_sys += phase_sys.eq(phase_sys2x)
-
-        sd_sys2x += [
-            If(phase_sys2x == phase_sys,
-                phase_sel.eq(0),
-            ).Else(
-                phase_sel.eq(~phase_sel)
-            ),
-            phase_sys2x.eq(~phase_sel)
-        ]
+        self.comb += phase_sel.eq(~ClockSignal("sys"))
 
 
         # Commands and address
-        dfi_omit = set(["rddata", "rddata_en", "rddata_valid", "wrdata", "wrdata_en"])
+        dfi_omit = set(["rddata", "rddata_valid", "wrdata", "wrdata_en"])
         self.comb += [
             If(~phase_sel,
                 dfi.phases[0].connect(full_rate_phy.dfi.phases[0], omit=dfi_omit),
@@ -181,7 +185,7 @@ class HalfRateGENSDRPHY(Module):
         ]
 
         # Reads
-        rddata = Signal(2*databits)
+        rddata = Signal(databits)
         rddata_valid = Signal()
 
         self.sync.sys2x += [
@@ -189,19 +193,45 @@ class HalfRateGENSDRPHY(Module):
             rddata.eq(full_rate_phy.dfi.phases[0].rddata)
         ]
 
-        rddata_d = Signal(2*databits)
+        self.rddata_mid1 = rddata
+        self.rddata_valid_mid1 = rddata_valid
+
+        rddata_d = Signal(databits)
         rddata_valid_d = Signal()
         self.sync.sys2x += [
             rddata_valid_d.eq(rddata_valid),
             rddata_d.eq(rddata)
         ]
+        #  rddata = rddata_d
+        #  rddata_valid = rddata_valid_d
 
-        rddata = rddata_d
-        rddata_valid = rddata_valid_d
+        self.rddata_mid2 = rddata
+        self.rddata_valid_mid2 = rddata_valid
+
+        rddata_d2 = Signal(databits)
+        rddata_valid_d2 = Signal()
+        self.sync.sys2x += [
+            rddata_valid_d2.eq(rddata_valid),
+            rddata_d2.eq(rddata)
+        ]
+
+        dfi_p1_rddata = Signal(databits)
+        dfi_p1_rddata_valid = Signal()
+
+        self.rddata_p1_mid = dfi_p1_rddata
+        self.rddata_valid_p1_mid = dfi_p1_rddata_valid
 
         self.sync += [
-            dfi.phases[0].rddata.eq(rddata),
-            dfi.phases[0].rddata_valid.eq(rddata_valid),
-            dfi.phases[1].rddata.eq(full_rate_phy.dfi.phases[0].rddata),
-            dfi.phases[1].rddata_valid.eq(full_rate_phy.dfi.phases[0].rddata_valid),
+            #  dfi.phases[0].rddata.eq(rddata),
+            #  dfi.phases[0].rddata_valid.eq(rddata_valid),
+            #
+            #  dfi_p1_rddata.eq(full_rate_phy.dfi.phases[0].rddata),
+            #  dfi_p1_rddata_valid.eq(full_rate_phy.dfi.phases[0].rddata_valid),
+            #  dfi.phases[1].rddata.eq(dfi_p1_rddata),
+            #  dfi.phases[1].rddata_valid.eq(dfi_p1_rddata_valid),
+
+            dfi.phases[0].rddata.eq(rddata_d),
+            dfi.phases[0].rddata_valid.eq(rddata_valid_d),
+            dfi.phases[1].rddata.eq(rddata),
+            dfi.phases[1].rddata_valid.eq(rddata_valid_d),
         ]
