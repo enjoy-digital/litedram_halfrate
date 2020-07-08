@@ -12,8 +12,9 @@ def parse_args():
     parser.add_argument("-i", "--interleaved", action="store_true",
                         help="Interleave writes and reads")
     parser.add_argument("-l", "--length", default="64", help="Length of test")
-    parser.add_argument("-s", "--start",  default="0",  help="Number of start word")
-    parser.add_argument("-r", "--read-only", action="store_true", help="Number of start word")
+    parser.add_argument("-b", "--base",   default="0",  help="Number of start word")
+    parser.add_argument("-s", "--step",   default="1",  help="Step between words")
+    parser.add_argument("-r", "--read-only", action="store_true", help="Do not write any data")
     parser.add_argument("--random", action="store_true", help="Random data")
     parser.add_argument("--random-address", action="store_true", help="Random address")
     parser.add_argument("--no-init", action="store_true", help="No SDRAM initialization")
@@ -101,15 +102,16 @@ if not args.no_init:
 sdram_hardware_control()
 
 if not args.no_main:
-    start = wb.mems.main_ram.base + 4 * int(args.start, 0)
+    base = wb.mems.main_ram.base + 4 * int(args.base, 0)
     length = 4 * int(args.length, 0)
+    step = 4 * int(args.step, 0)
 
     if not args.random_address:
-        pattern = range(start, start + length, 4)
+        pattern = range(base, base + length*step//4, step)
     else:
         pattern = [wb.mems.main_ram.base + seed_to_data(i) % wb.mems.main_ram.size for i in range(length//4)]
     errors = memtest(wb, pattern, write=not args.read_only, read=True,
             interleaved_rw=args.interleaved, random=args.random)
-    print("{} errors".format(errors))
+    print("errors: {:3d}/{:3d}".format(errors, len(pattern)))
 
     wb.close()
