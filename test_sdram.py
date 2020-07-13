@@ -109,7 +109,7 @@ if not args.no_main:
     if not args.random_address:
         pattern = range(base, base + length*step//4, step)
     else:
-        pattern = [wb.mems.main_ram.base + seed_to_data(i) % wb.mems.main_ram.size for i in range(length//4)]
+        pattern = [wb.mems.main_ram.base + (seed_to_data(i)*4) % wb.mems.main_ram.size for i in range(length//4)]
     errors = memtest(wb, pattern, write=not args.read_only, read=True,
             interleaved_rw=args.interleaved, random=args.random)
     print("errors: {:3d}/{:3d}".format(errors, len(pattern)))

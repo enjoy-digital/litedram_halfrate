@@ -94,8 +94,12 @@ class BaseSoC(SoCCore):
         # CRG --------------------------------------------------------------------------------------
         self.submodules.crg = _CRG(platform, sys_clk_freq, sdram_sys2x=sdram_sys2x)
 
-        #  l2_size = 0
-        l2_size = 32
+        l2_size = kwargs["l2_size"]
+        if l2_size != 0:
+            l2_size = 32
+        print("=" * 80)
+        print("  L2 cache size = {}".format(l2_size))
+        print("=" * 80)
 
         # SDR SDRAM --------------------------------------------------------------------------------
         if not self.integrated_main_ram_size:
@@ -123,7 +127,9 @@ class BaseSoC(SoCCore):
         if with_analyzer:
             from litescope import LiteScopeAnalyzer
             if not sdram_sys2x:
-                analyzer_signals = [self.sdrphy.dfi]
+                analyzer_signals = [
+                    self.sdrphy.dfi,
+                ]
             else:
                 wb_no_dat = ["cyc", "stb", "ack", "we", "adr", "err"]
                 dfi_signals = ["cas_n", "ras_n", "we_n", "address", "bank",
@@ -163,7 +169,7 @@ class BaseSoC(SoCCore):
                     pass
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals,
                 depth        = 128,
-                clock_domain = "sys2x",
+                clock_domain = "sys2x" if sdram_sys2x else "sys",
                 csr_csv      = "analyzer.csv")
             self.add_csr("analyzer")
             print("=" * 80)
@@ -197,7 +203,8 @@ def main():
         sys_clk_freq=int(float(args.sys_clk_freq)),
         sdram_module_cls=args.sdram_module,
         sdram_sys2x=args.sdram_sys2x,
-        with_analyzer=not args.no_analyzer)
+        with_analyzer=not args.no_analyzer,
+        l2_size=args.l2_size)
     builder = Builder(soc, csr_csv="csr.csv")
     builder.build(run=args.build)
     soc.generate_sdram_phy_py_header()
